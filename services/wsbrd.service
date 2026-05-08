@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 
-ExecStart=/home/peepul/gateway/scripts/start_wsbrd.sh
+ExecStart=/home/peepul/Wisun-Gateway/scripts/start_wsbrd.sh
 
 Restart=always
 RestartSec=5
