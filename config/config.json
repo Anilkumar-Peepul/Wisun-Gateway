@@ -7,7 +7,7 @@
     "username": "ss_user",
     "password": "123456",
     "client_id": "CHANGE_ME2",
-    "ca_cert": "/app/certs/stage_ca.crt"
+    "ca_cert": "certs/stage_ca.crt"
   },
 
   "live": {
@@ -16,6 +16,6 @@
     "username": "ss_user",
     "password": "123456",
     "client_id": "CHANGE_ME2",
-    "ca_cert": "/app/certs/live_ca.crt"
+    "ca_cert": "certs/live_ca.crt"
   }
 }
