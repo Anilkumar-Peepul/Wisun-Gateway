@@ -13,14 +13,30 @@ from pathlib import Path
 import signal
 from aiocoap.resource import Resource
 from pydbus import SystemBus
+# ================= CONFIG LOAD =================
 
-# Configurations
-GATEWAY_NAME = "TEST_GATEWAY"
-CA_CERT_PATH = "./ca_cert_stage.crt"
-MQTT_USERNAME = "ss_user"
-MQTT_PASSWORD = "123456"
-MQTT_BROKER = "e0be1176.ala.asia-southeast1.emqxsl.com"
-MQTT_PORT = 8883
+BASE_DIR = Path(__file__).resolve().parent
+
+with open(BASE_DIR / "config/gateway.json") as f:
+    gateway_config = json.load(f)
+
+with open(BASE_DIR / "config/config.json") as f:
+    broker_config = json.load(f)
+
+ENVIRONMENT = gateway_config.get("environment", "staging")
+
+mqtt_config = broker_config[ENVIRONMENT]
+
+GATEWAY_NAME = gateway_config["gateway_name"]
+
+MQTT_BROKER = mqtt_config["broker"]
+MQTT_PORT = mqtt_config["port"]
+MQTT_USERNAME = mqtt_config["username"]
+MQTT_PASSWORD = mqtt_config["password"]
+
+CA_CERT_PATH = mqtt_config["ca_cert"]
+
+# ===============================================
 COAP_GET_TIMEOUT = 10  # seconds
 COAP_PUT_TIMEOUT = 10   # seconds
 DEVICE_SYNC_PERIOD = 30000  # seconds
