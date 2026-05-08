@@ -4,10 +4,3 @@ network_name = {{NETWORK_NAME}}
 
 uart_device = {{UART_PORT}}
 
-ipv6_prefix = fd00:6172::/64
-
-fan_version = 1.1
-
-gtk_new_install_required = false
-
-pcap_file = /tmp/wisun.pcap
