@@ -1,0 +1,16 @@
+[Unit]
+Description=Interface Switcher Service for wlan0 and ppp0
+After=network.target quectel-ppp.service
+Requires=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/peepul/interface_switcher.py
+Restart=always
+RestartSec=10
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

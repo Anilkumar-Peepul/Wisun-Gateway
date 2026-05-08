@@ -1,0 +1,15 @@
+[Unit]
+Description=Quectel EC200 PPP Connection Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/pppd call quectel-ppp
+#ExecStartPost=/bin/bash -c 'echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf'
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
