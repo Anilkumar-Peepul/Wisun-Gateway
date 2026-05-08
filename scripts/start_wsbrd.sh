@@ -2,7 +2,7 @@
 
 set -e
 
-BASE_DIR="/home/peepul/gateway"
+BASE_DIR="/home/peepul/Wisun-Gateway"
 
 echo "[INFO] Generating wsbrd.conf..."
 
