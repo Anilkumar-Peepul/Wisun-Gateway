@@ -1,0 +1,27 @@
+version: '3.9'
+
+services:
+  wisun_gateway:
+    build: .
+
+    container_name: wisun_gateway
+
+    restart: always
+
+    privileged: true
+
+    network_mode: host
+
+    devices:
+      - "/dev/ttyAMA0:/dev/ttyAMA0"
+
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./certs:/app/certs
+
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    command: python app.py

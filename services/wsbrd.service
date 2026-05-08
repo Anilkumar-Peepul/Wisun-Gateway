@@ -1,0 +1,17 @@
+[Unit]
+Description=Wi-SUN Border Router Service
+After=network.target
+
+[Service]
+Type=simple
+
+ExecStart=/home/pi/gateway/scripts/start_wsbrd.sh
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

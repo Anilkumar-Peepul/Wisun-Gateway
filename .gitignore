@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+
+logs/*
+!logs/.gitkeep
+
+data/offline_logs/*
+!data/offline_logs/.gitkeep
+
+*.csv
+*.log

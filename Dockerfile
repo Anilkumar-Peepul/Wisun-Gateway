@@ -2,25 +2,35 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies (including those needed for pydbus / gi)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    build-essential \
+    pkg-config \
     libssl-dev \
     libffi-dev \
-    build-essential \
     libgirepository1.0-dev \
     gir1.2-glib-2.0 \
     python3-gi \
+    python3-gi-cairo \
+    libcairo2-dev \
+    net-tools \
+    iputils-ping \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (better layer caching)
+# Copy requirements first
 COPY requirements.txt .
 
-# Create virtual environment and install Python packages
-RUN python -m venv env && \
-    env/bin/pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application
 COPY . .
 
-# Run the app
-CMD ["env/bin/python", "app.py"]
+# Create runtime folders
+RUN mkdir -p logs data/offline_logs
+
+# Start application
+CMD ["python", "app.py"]

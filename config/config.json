@@ -1,0 +1,21 @@
+{
+  "environment": "staging",
+
+  "staging": {
+    "broker": "e0be1176.ala.asia-southeast1.emqxsl.com",
+    "port": 8883,
+    "username": "ss_user",
+    "password": "123456",
+    "client_id": "CHANGE_ME2",
+    "ca_cert": "/app/certs/stage_ca.crt"
+  },
+
+  "live": {
+    "broker": "e2b4bba3.ala.asia-southeast1.emqxsl.com",
+    "port": 8883,
+    "username": "ss_user",
+    "password": "123456",
+    "client_id": "CHANGE_ME2",
+    "ca_cert": "/app/certs/live_ca.crt"
+  }
+}

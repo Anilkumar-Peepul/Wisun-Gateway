@@ -1,7 +1,5 @@
-asyncio
-paho-mqtt
-aiocoap
-openpyxl
-PyGObject
-pydbus
-
+paho-mqtt==1.6.1
+aiocoap==0.4.7
+openpyxl==3.1.2
+PyGObject==3.46.0
+pydbus==0.6.0
