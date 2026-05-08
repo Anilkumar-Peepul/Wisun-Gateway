@@ -15,15 +15,7 @@ from aiocoap.resource import Resource
 from pydbus import SystemBus
 import logging
 # ================= CONFIG LOAD =================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(GATEWAY_RUNTIME_LOG),
-        logging.StreamHandler()
-    ]
-)
-BASE_DIR = Path(__file__).resolve().parent
+
 # ================= PATHS =================
 
 LOG_DIR = BASE_DIR / "logs"
