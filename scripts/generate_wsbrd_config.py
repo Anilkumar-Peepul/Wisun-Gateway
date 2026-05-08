@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-BASE_DIR = Path("/home/pi/gateway")
+BASE_DIR = Path("/home/pi/Wisun-Gateway")
 
 gateway_json = BASE_DIR / "config/gateway.json"
 template_file = BASE_DIR / "config/wsbrd.conf.template"
