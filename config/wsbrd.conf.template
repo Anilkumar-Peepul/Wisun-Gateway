@@ -1,27 +1,13 @@
-version: '3.9'
+# Wi-SUN Border Router Configuration
 
-services:
-  wisun_gateway:
-    build: .
+network_name = {{NETWORK_NAME}}
 
-    container_name: wisun_gateway
+uart_device = {{UART_PORT}}
 
-    restart: always
+ipv6_prefix = fd00:6172::/64
 
-    privileged: true
+fan_version = 1.1
 
-    network_mode: host
+gtk_new_install_required = false
 
-    devices:
-      - "/dev/ttyAMA0:/dev/ttyAMA0"
-
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./certs:/app/certs
-
-    environment:
-      - PYTHONUNBUFFERED=1
-
-    command: python app.py
+pcap_file = /tmp/wisun.pcap
