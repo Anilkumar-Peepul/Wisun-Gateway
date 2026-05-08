@@ -14,4 +14,4 @@ RUN python -m venv env
 RUN env/bin/pip install --no-cache-dir -r requirements.txt
 
 # Run app using venv python
-CMD ["/app/env/bin/python", "app.py"]
+CMD ["env/bin/python", "app.py"]
