@@ -1,4 +1,3 @@
-import asyncio
 import re
 import time
 import json
@@ -6,7 +5,6 @@ import paho.mqtt.client as mqtt
 from aiocoap import Context, Message, GET, PUT, CON
 import ssl
 import os
-import logging
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
 import csv
@@ -15,56 +13,36 @@ import signal
 from aiocoap.resource import Resource
 from pydbus import SystemBus
 
+# Configurations
+GATEWAY_NAME = "TEST_GATEWAY"
+CA_CERT_PATH = "./ca_cert_stage.crt"
+MQTT_USERNAME = "ss_user"
+MQTT_PASSWORD = "123456"
+MQTT_BROKER = "e0be1176.ala.asia-southeast1.emqxsl.com"
+MQTT_PORT = 8883
+COAP_GET_TIMEOUT = 10  # seconds
+COAP_PUT_TIMEOUT = 10   # seconds
+DEVICE_SYNC_PERIOD = 30000  # seconds
+DEVICE_LIVE_PERIOD = 10  # seconds
+LOG_FILE = Path("BR_V1.0_LOGG_FILE")
+IP_MAC_CSV = Path("ip_mac_mappings.csv")
+
 # Define global variables
 flag = 0
 Frequency = 1
 connected_nodes = set()
 active_nodes = set()
 macs = set()
+previous_macs = set()
+gateway_name = GATEWAY_NAME
 mac_to_ip = {}
 ip_to_mac = {}
 Gateway_list = {}
 reg_mac = set()
 reg_ip = set()
-SYNC_TIME = 180
-LIVE_TIME = 20
-
-# Load configuration from config.json
-CONFIG_FILE = "./config.json"
-
-def load_config():
-    global network_name
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            network_name = config.get("network_name", "GROWEL_AQUA_GTW_3")
-            return {
-                "broker": config.get("broker", "e2b4bba3.ala.asia-southeast1.emqxsl.com"),
-                "port": config.get("port", 8883),
-                "client_id": config.get("client_id", "Growel AQUA 3"),
-                "username": config.get("username", "ss_user"),
-                "password": config.get("password", "123456"),
-                "ca_cert": config.get("ca_cert", "./ca_cert.crt")
-            }
-    except Exception as e:
-        logging.error(f"Failed to load config from {CONFIG_FILE}: {e}")
-        print(f"ERROR: Failed to load config from {CONFIG_FILE}: {e}")
-        return {
-            "broker": "e2B4bba3.ala.asia-southeast1.emqxsl.com",
-            "port": 8883,
-            "client_id": "Growel Aqua 3",
-            "username": "ss_user",
-            "password": "123456",
-            "ca_cert": "./ca_cert.crt"
-        }
-
-# Configure logging
-logging.basicConfig(
-    filename='BR_V1.0_LOGG_FILE',
-    filemode='w',
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+SYNC_TIME = DEVICE_SYNC_PERIOD
+LIVE_TIME = DEVICE_LIVE_PERIOD
+CA_CERT = Path(CA_CERT_PATH)
 
 class Node:
     def __init__(self, ipv6_address='', uri="", payload=''):
@@ -72,7 +50,7 @@ class Node:
         self.uri = uri
         self.payload = payload.encode('utf-8') if payload else payload
 
-    async def async_get_Device_data(self, timeout=40):
+    async def async_get_Device_data(self, timeout=COAP_GET_TIMEOUT):
         try:
             uri = f"coap://[{self.ipv6_address}]:5683/{self.uri}"
             protocol = await Context.create_client_context()
@@ -80,55 +58,29 @@ class Node:
             try:
                 response = await asyncio.wait_for(protocol.request(request).response, timeout)
             except asyncio.TimeoutError:
-                if flag == 0:
-                    print(f"ERROR: Timeout: No response from node {self.ipv6_address} within {timeout} seconds.")
-                elif flag == 1:
-                    logging.error(f"Timeout: No response from node {self.ipv6_address} within {timeout} seconds.")
-                return None
-            except Exception as e:
-                if flag == 0:
-                    print(f"WARNING: Exception during CoAP request to {self.ipv6_address}: {e}")
-                elif flag == 1:
-                    logging.warning(f"Exception during CoAP request to {self.ipv6_address}: {e}")
+                print(f"ERROR: Timeout: No response from node {self.ipv6_address} within {timeout} seconds.")
                 return None
             output = response.payload.decode().strip()
-            if flag == 0:
-                print(f"INFO: Within {timeout} seconds")
-                print(f"INFO: Device data from node {self.ipv6_address}: {output}")
-            elif flag == 1:
-                logging.info(f"Within {timeout} seconds")
-                logging.info(f"Device data from node {self.ipv6_address}: {output}")
+            print("get data: {output} ")
             try:
                 return json.loads(output)
             except json.JSONDecodeError:
-                if flag == 0:
-                    print(f"ERROR: Failed to parse Device data from node {self.ipv6_address}")
-                    return None
-                elif flag == 1:
-                    logging.error(f"Failed to parse Device data from node {self.ipv6_address}")
-                    return None
+                print(f"ERROR: Failed to parse Device data from node {self.ipv6_address}")
+                return None
         except Exception as e:
-            if flag == 0:
-                print(f"WARNING: Exception in async_get_Device_data for node {self.ipv6_address}: {e}")
-                return None
-            elif flag == 1:
-                logging.warning(f"Exception in async_get_Device_data for node {self.ipv6_address}: {e}")
-                return None
+            print(f"WARNING: Exception in async_get_Device_data for node {self.ipv6_address}: {e}")
+            return None
 
     async def check_nodes_activity(self):
-        global connected_nodes, active_nodes, mac_to_ip, ip_to_mac
-        if flag == 0:
-            print(f"Connected Nodes: {connected_nodes}")
-        else:
-            logging.info(f"Connected Nodes: {connected_nodes}")
-        tasks = [Node(node, "settings/auto_send").async_get_Device_data(40) for node in connected_nodes]
-        results = await asyncio.gather(*tasks)
+        global connected_nodes, active_nodes
+        tasks = [Node(node, "settings/auto_send").async_get_Device_data(COAP_GET_TIMEOUT) for node in connected_nodes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         active_nodes = {node for node, result in zip(connected_nodes, results) if result is not None}
         return active_nodes
 
     async def node_command(self):
         context = await Context.create_client_context()
-        request1 = Message(
+        request = Message(
             mtype=CON,
             code=PUT,
             payload=self.payload,
@@ -136,32 +88,21 @@ class Node:
             token=os.urandom(2)
         )
         try:
-            response = await asyncio.wait_for(context.request(request1).response, timeout=120)
+            response = await asyncio.wait_for(context.request(request).response, timeout=COAP_PUT_TIMEOUT)
             reply = response.payload.decode("utf-8") if response.payload else ""
-            reply = json.loads(reply)
-            print(f"PUT response from {self.ipv6_address}/{self.uri}: {reply} (Code: {response.code})")
-            if flag == 0:
-                print(f"INFO: Result for {self.ipv6_address} on {self.uri}: {response.code}\n{reply!r}")
-            elif flag == 1:
-                logging.info(f"Result for {self.ipv6_address} on {self.uri}: {response.code}\n{reply!r}")
-            if response.code:
-                if flag == 0:
-                    print(f"INFO: The node {self.ipv6_address} successfully processed the request on {self.uri}.")
-                elif flag == 1:
-                    logging.info(f"The node {self.ipv6_address} successfully processed the request on {self.uri}.")
+            print("reply : ",response)
+            try:
+                reply = json.loads(reply)
+            except json.JSONDecodeError:
+                print(f"ERROR: Failed to parse CoAP response from {self.ipv6_address}/{self.uri}: {reply}")
+                return None
+            print(f"INFO: Result for {self.ipv6_address} on {self.uri}: {response.code}\n{reply!r}")
             return reply
         except asyncio.TimeoutError:
-            if flag == 0:
-                print(f"ERROR: Timeout: No response from {self.ipv6_address} on {self.uri} within 5 seconds")
-                return None
-            elif flag == 1:
-                logging.error(f"Timeout: No response from {self.ipv6_address} on {self.uri} within 5 seconds")
-                return None
+            print(f"ERROR: Timeout: No response from {self.ipv6_address} on {self.uri} within {COAP_PUT_TIMEOUT} seconds")
+            return None
         except Exception as e:
-            if flag == 0:
-                print(f"WARNING: Exception CoAP request failed on {self.uri}: {e}")
-            elif flag == 1:
-                logging.warning(f"Exception CoAP request failed on {self.uri}: {e}")
+            print(f"WARNING: Exception CoAP request failed on {self.uri}: {e}")
             return None
 
 class WiSunMonitor:
@@ -182,7 +123,7 @@ class WiSunMonitor:
         return ipv6
 
     async def get_nodes(self):
-        global connected_nodes, network_name
+        global connected_nodes, gateway_name
         try:
             nodes = await self.proxy.Nodes if "ipv6" in self.proxy.Nodes[0][1] else self.proxy.RoutingGraph
             result = set()
@@ -197,93 +138,117 @@ class WiSunMonitor:
             connected_nodes = result
             return tuple(result)
         except Exception as e:
-            if flag == 0:
-                print(f"WARNING: Exception error fetching nodes: {e}")
-            elif flag == 1:
-                logging.warning(f"Exception error fetching nodes: {e}")
+            print(f"WARNING: Exception error fetching nodes: {e}")
             return []
 
-    async def update_mac_ip_mapping(self, mqtt_client, reg):
-        global connected_nodes, network_name, mac_to_ip, ip_to_mac, reg_mac, macs, Gateway_list
-        previous_nodes = connected_nodes.copy()
-        await self.get_nodes()
-        new_nodes = connected_nodes - previous_nodes if self.initial_mapping_done else connected_nodes
-        if len(macs) == 0:
-            new_nodes = connected_nodes
-        if new_nodes:
-            logging.info(f"New nodes detected: {new_nodes}")
-            print(f"{datetime.now()} - INFO - New nodes detected: {new_nodes}")
-            logging.info("Updating MAC-to-IP mapping")
-            print(f"{datetime.now()} - INFO - Updating MAC-to-IP mapping")
-            tasks = [Node(node, "info/all").async_get_Device_data(40) for node in new_nodes]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for ip, data in zip(new_nodes, results):
-                if data is not None and not isinstance(data, Exception):
-                    mac = data.get("MAC", "N/A").upper()
-                    if mac != "N/A":
-                        if mac not in macs:
-                            logging.info(f"New MAC address detected for IP {ip}: {mac}")
-                            print(f"{datetime.now()} - INFO - New MAC address detected for IP {ip}: {mac}")
+    async def load_ip_mac_from_csv(self):
+        global mac_to_ip, ip_to_mac, macs
+        if IP_MAC_CSV.exists():
+            try:
+                with open(IP_MAC_CSV, mode='r', newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        ip = row['IP']
+                        mac = row['MAC'].upper()
                         mac_to_ip[mac] = ip
                         ip_to_mac[ip] = mac
                         macs.add(mac)
-                        if mac in reg_mac:
-                            reg.append_ip(ip)
-                        logging.info(f"Mapped MAC {mac} to IP {ip}")
-                        print(f"{datetime.now()} - INFO - Mapped MAC {mac} to IP {ip}")
-                    else:
-                        logging.warning(f"No valid MAC address in response from {ip}")
-                        print(f"{datetime.now()} - WARNING - No valid MAC address in response from {ip}")
-                else:
-                    logging.error(f"Failed to fetch MAC from {ip}: {data}")
-                    print(f"{datetime.now()} - ERROR - Failed to fetch MAC from {ip}: {data}")
-            Gateway_list = {"gtw_n": network_name, "cntd_n": list(macs)}
-            if len(macs) != 0 and network_name:
-                mqtt_client.publish("gateways/gateway_name/devices/ack", json.dumps(Gateway_list))
-            logging.info(f"MAC-to-IP mapping: {mac_to_ip}")
-            print(f"{datetime.now()} - INFO - MAC-to-IP mapping: {mac_to_ip}")
-            logging.info(f"IP-to-MAC mapping: {ip_to_mac}")
-            print(f"{datetime.now()} - INFO - IP-to-MAC mapping: {ip_to_mac}")
-            self.initial_mapping_done = True
+                print(f"INFO: Loaded {len(mac_to_ip)} IP-MAC mappings from {IP_MAC_CSV}")
+            except Exception as e:
+                print(f"ERROR: Failed to load IP-MAC mappings from CSV: {e}")
         else:
-            print("No New Node Connected")
+            print(f"INFO: No existing CSV file found at {IP_MAC_CSV}")
+            print(f"INFO: Creating {IP_MAC_CSV} CSV file")
+            write_header = not IP_MAC_CSV.exists()  # Write header only if file doesn't exist
+            with open(IP_MAC_CSV, mode='a', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=['IP', 'MAC'])
+                if write_header:
+                    writer.writeheader()
+            
+
+    async def save_ip_mac_to_csv(self, new_mappings):
+        try:
+            # Check existing entries to avoid duplicates
+            existing_mappings = set()
+            if IP_MAC_CSV.exists():
+                with open(IP_MAC_CSV, mode='r', newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        existing_mappings.add((row['IP'], row['MAC'].upper()))
+
+            # Append new mappings that don't already exist
+            write_header = not IP_MAC_CSV.exists()  # Write header only if file doesn't exist
+            with open(IP_MAC_CSV, mode='a', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=['IP', 'MAC'])
+                if write_header:
+                    writer.writeheader()
+                for ip, mac in new_mappings:
+                    if (ip, mac) not in existing_mappings:
+                        writer.writerow({'IP': ip, 'MAC': mac})
+                        print(f"INFO: Saved mapping to CSV - IP: {ip}, MAC: {mac}")
+        except Exception as e:
+            print(f"ERROR: Failed to save IP-MAC mappings to CSV: {e}")
 
     async def monitor_nodes(self, mqtt_client, logger):
-        global connected_nodes, network_name, Gateway_list, reg_ip
-        if flag == 0:
-            print("INFO: Handling monitoring")
-        elif flag == 1:
-            logging.info("Handling monitoring")
-        try:
-            if connected_nodes:
-                node = Node()
-                tasks = [Node(node_item, "info/motor_status").async_get_Device_data() for node_item in connected_nodes]
-                data = await asyncio.gather(*tasks, return_exceptions=True)
-                for node_item, data_item in zip(connected_nodes, data):
-                    if data_item is not None and not isinstance(data_item, Exception):
-                        if flag == 0:
-                            print(f"INFO: Data from {node_item}: {data_item}")
-                        elif flag == 1:
-                            logging.info(f"Data from {node_item}: {data_item}")
-                        topic = f"gateways/{network_name}/devices/live_data"
-                        message = json.dumps(data_item)
-                        mqtt_client.publish(topic, message)
-                        logger.process_payload(data_item)
+        global connected_nodes, gateway_name, mac_to_ip, ip_to_mac, macs
+        await self.get_nodes()
+        print(f"INFO: Processing {len(connected_nodes)} nodes")
+        
+        # Load existing mappings from CSV
+        await self.load_ip_mac_from_csv()
+
+        # Fetch and print data for all devices, and collect new mappings
+        new_mappings = []
+        current_macs = set()
+        if connected_nodes:
+            print("\nFetching data from all devices (URI: info/motor_status):")
+            tasks = [Node(ip, "info/motor_status").async_get_Device_data() for ip in connected_nodes]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for ip, data in zip(connected_nodes, results):
+                if data is not None and not isinstance(data, Exception):
+                    print(f"\nData from {ip}:")
+                    print(json.dumps(data, indent=2))
+                    topic = f"gateways/{gateway_name}/devices/live_data"
+                    message = json.dumps(data)
+                    mqtt_client.publish(topic, message)
+                    logger.process_payload(data)
+                    mac = data.get("d_id", "N/A").upper()
+                    print(f"INFO: MAC: {mac} to IP: {ip}")
+                    if mac != "N/A":
+                        print(f"MACS : {current_macs}" )
+                        if ip not in ip_to_mac or mac not in macs:  # Only add new mappings
+                            mac_to_ip[mac] = ip
+                            ip_to_mac[ip] = mac
+                            current_macs.add(mac)
+                            new_mappings.append((ip, mac))
+                            print(f"INFO: New mapping - MAC: {mac} to IP: {ip}")
                     else:
-                        if flag == 0:
-                            print(f"ERROR: No data for {node_item}")
-                        elif flag == 1:
-                            logging.error(f"No data for {node_item}")
-            else:
-                if flag == 0:
-                    print("ERROR: No Nodes are Connected")
-                elif flag == 1:
-                    logging.error("No Nodes are Connected")
-        except Exception as e:
-            if flag == 0:
-                print(f"WARNING: Exception error during monitoring: {e}")
-            elif flag == 1:
-                logging.warning(f"Exception error during monitoring: {e}")
+                        print(f"WARNING: Invalid or missing MAC address (d_id) from {ip}: {mac}")
+                else:
+                    print(f"ERROR: Failed to fetch data from {ip}: {data}")
+            macs = current_macs
+            current_macs.clear()
+        else:
+            print("INFO: No connected nodes to process")
+
+        # Save new mappings to CSV
+        if new_mappings:
+            await self.save_ip_mac_to_csv(new_mappings)
+
+        # Print the current mappings
+        print("\nMAC to IP Mapping:")
+        if mac_to_ip:
+            for mac, ip in mac_to_ip.items():
+                print(f"MAC: {mac} -> IP: {ip}")
+        else:
+            print("No MAC to IP mappings available.")
+        
+        print("\nIP to MAC Mapping:")
+        if ip_to_mac:
+            for ip, mac in ip_to_mac.items():
+                print(f"IP: {ip} -> MAC: {mac}")
+        else:
+            print("No IP to MAC mappings available.")
 
 class MQTTClient:
     GATEWAY_TOPIC = "gateways/gateway_name/devices"
@@ -297,25 +262,22 @@ class MQTTClient:
     MOTOR_CONFIG_TOPIC = "gateways/{}/devices/motor/config"
     MOTOR_MODE_CONFIG_TOPIC = "gateways/{}/devices/mode_change"
     MOTOR_MODE_CONFIG_ACK_TOPIC = "gateways/{}/devices/mode_change/ack"
-    MOTOR_SCHEDULE_TOPIC = "gateways/{}/devices/schedule"
-    MOTOR_SCHEDULE_ACK_TOPIC = "gateways/{}/devices/schedule/ack"
-    
-    def __init__(self, reg):
-        config = load_config()
-        self.broker = config["broker"]
-        self.port = config["port"]
-        self.client_id = config["client_id"]
-        self.username = config["username"]
-        self.password = config["password"]
-        self.client = mqtt.Client(self.client_id)
+
+    def __init__(self, broker, port, client_id, username, password, ca_cert, reg):
+        self.broker = broker
+        self.port = port
+        self.client_id = client_id
+        self.username = username
+        self.password = password
+        self.client = mqtt.Client(client_id)
         self.loop = asyncio.get_event_loop()
-        self.client.username_pw_set(self.username, self.password)
+        self.client.username_pw_set(username, password)
         self.client.on_connect = self.on_connect
         self.client.on_disconnect = self.on_disconnect
         self.client.on_message = self.on_message
         self.client.on_subscribe = self.on_subscribe
         self.is_connected = False
-        self.client.tls_set(ca_certs=config["ca_cert"], tls_version=ssl.PROTOCOL_TLSv1_2)
+        self.client.tls_set(ca_certs=str(ca_cert), tls_version=ssl.PROTOCOL_TLSv1_2)
         self.device_config_topic = None
         self.motor_control_topic = None
         self.motor_control_ack_topic = None
@@ -325,49 +287,33 @@ class MQTTClient:
         self.motor_config_topic = None
         self.motor_mode_config_topic = None
         self.motor_mode_config_ack_topic = None
-        self.motor_schedule_topic = None
-        self.motor_schedule_ack_topic = None
         self.reg = reg
 
-    def update_dynamic_topics(self, network_name):
-        self.device_config_topic = self.DEVICE_CONFIG_TOPIC.format(network_name)
-        self.motor_control_topic = self.MOTOR_CONTROL_TOPIC.format(network_name)
-        self.motor_control_ack_topic = self.MOTOR_CONTROL_ACK_TOPIC.format(network_name)
-        self.device_status_topic = self.DEVICE_STATUS_TOPIC.format(network_name)
-        self.device_sync_ack_topic = self.DEVICE_SYNC_ACK_TOPIC.format(network_name)
-        self.device_config_ack_topic = self.DEVICE_CONFIG_ACK_TOPIC.format(network_name)
-        self.motor_config_topic = self.MOTOR_CONFIG_TOPIC.format(network_name)
-        self.motor_mode_config_topic = self.MOTOR_MODE_CONFIG_TOPIC.format(network_name)
-        self.motor_mode_config_ack_topic = self.MOTOR_MODE_CONFIG_ACK_TOPIC.format(network_name)
-        self.motor_schedule_topic = self.MOTOR_SCHEDULE_TOPIC.format(network_name)
-        self.motor_schedule_ack_topic = self.MOTOR_SCHEDULE_ACK_TOPIC.format(network_name)
+    def update_dynamic_topics(self, gateway_name):
+        self.device_config_topic = self.DEVICE_CONFIG_TOPIC.format(gateway_name)
+        self.motor_control_topic = self.MOTOR_CONTROL_TOPIC.format(gateway_name)
+        self.motor_control_ack_topic = self.MOTOR_CONTROL_ACK_TOPIC.format(gateway_name)
+        self.device_status_topic = self.DEVICE_STATUS_TOPIC.format(gateway_name)
+        self.device_sync_ack_topic = self.DEVICE_SYNC_ACK_TOPIC.format(gateway_name)
+        self.device_config_ack_topic = self.DEVICE_CONFIG_ACK_TOPIC.format(gateway_name)
+        self.motor_config_topic = self.MOTOR_CONFIG_TOPIC.format(gateway_name)
+        self.motor_mode_config_topic = self.MOTOR_MODE_CONFIG_TOPIC.format(gateway_name)
+        self.motor_mode_config_ack_topic = self.MOTOR_MODE_CONFIG_ACK_TOPIC.format(gateway_name)
 
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
-            if flag == 0:
-                print("INFO: Successfully connected to MQTT Broker with SSL!")
-            elif flag == 1:
-                logging.info("Successfully connected to MQTT Broker with SSL!")
+            print("INFO: Successfully connected to MQTT Broker with SSL!")
             self.is_connected = True
         else:
-            if flag == 0:
-                print(f"ERROR: Failed to connect, return code {rc}")
-            elif flag == 1:
-                logging.error(f"Failed to connect, return code {rc}")
+            print(f"ERROR: Failed to connect, return code {rc}")
             self.is_connected = False
 
     def on_disconnect(self, client, userdata, rc):
-        if flag == 0:
-            print("ERROR: Disconnected from MQTT Broker. Reconnecting...")
-        elif flag == 1:
-            logging.error("Disconnected from MQTT Broker. Reconnecting...")
+        print("ERROR: Disconnected from MQTT Broker. Reconnecting...")
         self.is_connected = False
 
     def on_subscribe(self, client, userdata, mid, granted_qos):
-        if flag == 0:
-            print(f"INFO: Successfully subscribed with QoS {granted_qos}")
-        elif flag == 1:
-            logging.info(f"Successfully subscribed with QoS {granted_qos}")
+        print(f"INFO: Successfully subscribed with QoS {granted_qos}")
 
     def is_ipv6(self, address):
         ipv6_pattern = r'^([0-9a-fA-F]{1,4}:){1,7}([0-9a-fA-F]{1,4}|:)$|^([0-9a-fA-F]{1,4}:)*::$|^::$'
@@ -378,37 +324,28 @@ class MQTTClient:
         return bool(re.match(mac_pattern, address))
 
     def on_message(self, client, userdata, msg):
-        if flag == 0:
-            print(f"INFO: Received message on topic {msg.topic}: {msg.payload.decode('utf-8')}")
-        elif flag == 1:
-            logging.info(f"Received message on topic {msg.topic}: {msg.payload.decode('utf-8')}")
+        print(f"INFO: Received message on topic {msg.topic}: {msg.payload.decode('utf-8')}")
         try:
             message = json.loads(msg.payload.decode('utf-8'))
         except json.JSONDecodeError as e:
-            if flag == 0:
-                print(f"ERROR: Invalid JSON in message on topic {msg.topic}: {e}")
-            elif flag == 1:
-                logging.error(f"Invalid JSON in message on topic {msg.topic}: {e}")
+            print(f"ERROR: Invalid JSON in message on topic {msg.topic}: {e}")
             return
         if msg.topic == self.GATEWAY_TOPIC:
-            global reg_mac, reg_ip, mac_to_ip, ip_to_mac
+            name = message.get("gtw_n", "N/A")
             try:
-                macs_addresses = message['cntd_n']
-                macs_addresses = set(macs_addresses)
-                RegisteredIPManager(file_path="Registered_Macs.txt").append_multi_ip(macs_addresses)
+                if name == gateway_name:
+                    #self.publish(self.GATEWAY_ACK_TOPIC, json.dumps(Gateway_list))
+                    print(f"INFO: Published gateway ack: {Gateway_list}")
+                else:
+                    print("INFO: Gateway name mismatched")
             except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Exception in Motor Config processing: {e}")
-                elif flag == 1:
-                    logging.error(f"Exception in Motor Config processing: {e}")
+                print(f"ERROR: Exception in processing GATEWAY_TOPIC: {e}")
         elif msg.topic == self.motor_control_topic:
             try:
+                print("Motor Controlling Task")
                 self.loop.create_task(self.handle_motor_control_message(message))
             except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Error scheduling motor control message: {e}")
-                else:
-                    logging.error(f"Error scheduling motor control message: {e}")
+                print(f"ERROR: Error scheduling motor control message: {e}")
                 error_payload = {
                     "d_id": message.get("d_id", "N/A"),
                     "mtr_1": 8,
@@ -419,10 +356,7 @@ class MQTTClient:
             try:
                 self.loop.create_task(self.handle_motor_mode_control_message(message))
             except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Error scheduling motor mode control message: {e}")
-                else:
-                    logging.error(f"Error scheduling motor mode control message: {e}")
+                print(f"ERROR: Error scheduling motor mode control message: {e}")
                 error_payload = {
                     "d_id": message.get("d_id", "N/A"),
                     "mtr_1": 8,
@@ -430,401 +364,353 @@ class MQTTClient:
                 }
                 self.publish(self.motor_mode_config_ack_topic, json.dumps(error_payload))
         elif msg.topic == self.motor_config_topic:
-            global reg_mac, reg_ip, mac_to_ip, ip_to_mac
             try:
-                macs_addresses = message['cntd_n']
-                macs_addresses = set(macs_addresses)
-                RegisteredIPManager(file_path="Registered_Macs.txt").append_multi_ip(macs_addresses)
+                d_id = message.get("d_id")
+                if not self.is_mac(d_id):
+                    print(f"ERROR: Invalid MAC address: {d_id}")
+                    return
+                ipv6 = mac_to_ip.get(d_id)
+                if ipv6:
+                    self.reg.append_device(d_id, ipv6)
+                    print(f"INFO: Registered MAC {d_id} with IP {ipv6}")
+                else:
+                    print(f"ERROR: No IP found for MAC {d_id}")
             except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Exception in Motor Config processing: {e}")
-                elif flag == 1:
-                    logging.error(f"Exception in Motor Config processing: {e}")
+                print(f"ERROR: Exception in motor config processing: {e}")
         elif msg.topic == self.device_config_topic:
             try:
                 d_id = message.get("d_id")
                 ip = mac_to_ip.get(d_id)
-                if flag == 0:
-                    print(f"INFO: Config MAC: {d_id}, Config IP: {ip}")
+                print(f"INFO: Config MAC: {d_id}, Config IP: {ip}")
                 if ip:
                     self.loop.create_task(self.handle_config(ip, json.dumps(message)))
                 else:
-                    config_ack = {"r": 0}
+                    config_ack = {"d_id": d_id, "r": 0}
                     self.publish(self.device_config_ack_topic, json.dumps(config_ack))
             except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Exception in config processing: {e}")
-                elif flag == 1:
-                    logging.error(f"Exception in config processing: {e}")
-                config_ack = {"sn": message.get("sn", ""), "d_id": d_id, "r": 0}
+                print(f"ERROR: Exception in config processing: {e}")
+                config_ack = {"sn": message.get("sn", ""), "d_id": message.get("d_id", "N/A"), "r": 0}
                 self.publish(self.device_config_ack_topic, json.dumps(config_ack))
-        elif msg.topic == self.motor_schedule_topic:
-            try:
-                d_id = message.get("d_id")
-                ip = mac_to_ip.get(d_id)
-                if flag == 0:
-                    print(f"INFO: Scheduling MAC: {d_id}, IP: {ip}")
-                else:
-                    logging.info(f"INFO: Scheduling MAC: {d_id}, IP: {ip}")
-                #message = json.loads(message)
-                del message['d_id']
-                self.loop.create_task(self.handle_scheduling_task(ip, json.dumps(message)))
-                if flag == 0:
-                    print(f"Updated Scheduling Payload: {json.dumps(message)}")
-                else:
-                    logging.info(f"Updated Scheduling Payload: {json.dumps(message)}")
-            except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Exception in Scheduling processing: {e}")
-                elif flag == 1:
-                    logging.error(f"Exception in Scheduling processing: {e}")
-
-    async def handle_scheduling_task(self, ip_address, schedule_message):
-        try:
-            state = await asyncio.wait_for(Node(ip_address, "create_schedule", schedule_message).node_command(), timeout=50)
-            message = state #json.loads(state)
-            sch_status = message.get("schedule_sts")
-            print("Status",sch_status)
-            if sch_status == "SCHEDULE_UPDATE_STARTED":
-                if flag == 0:
-                    print(f"Scheduling Status is {sch_status}")
-                else:
-                    logging.info(f"Scheduling Status is {sch_status}")
-                time.sleep(3)
-                state = await asyncio.wait_for(Node(ip_address, "create_schedule", '').async_get_Device_data(), timeout=50)
-                #sch_resp = json.loads(state)
-                if sch_resp == state:
-                    self.publish(self.motor_schedule_ack_topic, schedule_message)
-        except Exception as e:
-            if flag == 0:
-                print(f"Scheduling Error as {e}")
-            else:
-                logging.info(f"Scheduling Error as {e}")
 
     async def handle_motor_control_message(self, message):
         dev_list = []
         dev_err_list = []
         tasks = []
-        
+
         for device in message.get("dev", []):
-            d_id = device.get("d_id", None)
+            d_id = device.get("d_id")
             mtr_1 = device.get("mtr_1", None)
             mtr_2 = device.get("mtr_2", None)
-            
+
+            # ✅ Missing MAC
             if not d_id:
-                if flag == 0:
-                    print(f"ERROR: Missing d_id in device entry")
-                else:
-                    logging.error(f"Missing d_id in device entry")
                 error_payload = {"d_id": "N/A", "mtr_1": 8, "mtr_2": 8}
                 dev_err_list.append(error_payload)
-                self.publish(self.motor_control_ack_topic, json.dumps({"dev": [error_payload]}))
                 continue
 
-            ip = None
+            # ✅ Resolve IP
             if self.is_ipv6(d_id) and d_id in connected_nodes:
                 ip = d_id
             else:
                 ip = mac_to_ip.get(d_id)
+
             if not ip:
-                if flag == 0:
-                    print(f"ERROR: No IPv6 address found for device {d_id}")
-                else:
-                    logging.error(f"No IPv6 address found for device {d_id}")
                 error_payload = {"d_id": d_id, "mtr_1": 8, "mtr_2": 8}
                 dev_err_list.append(error_payload)
-                self.publish(self.motor_control_ack_topic, json.dumps({"dev": [error_payload]}))
                 continue
-            
+            # ✅ Validate mtr_1
             if mtr_1 is not None and (not isinstance(mtr_1, int) or mtr_1 not in [0, 1]):
-                if flag == 0:
-                    print(f"ERROR: Invalid mtr_1 value for device {d_id}: {mtr_1}")
-                else:
-                    logging.error(f"Invalid mtr_1 value for device {d_id}: {mtr_1}")
-                error_payload = {"d_id": d_id, "mtr_1": 9, "mtr_2": 9}
-                dev_err_list.append(error_payload)
-                self.publish(self.motor_control_ack_topic, json.dumps({"dev": [error_payload]}))
+                dev_err_list.append({"d_id": d_id, "mtr_1": 9})
                 continue
 
+            # ✅ Validate mtr_2
             if mtr_2 is not None and (not isinstance(mtr_2, int) or mtr_2 not in [0, 1]):
-                if flag == 0:
-                    print(f"ERROR: Invalid mtr_2 value for device {d_id}: {mtr_2}")
-                else:
-                    logging.error(f"Invalid mtr_2 value for device {d_id}: {mtr_2}")
-                error_payload = {"d_id": d_id, "mtr_1": 9, "mtr_2": 9}
-                dev_err_list.append(error_payload)
-                self.publish(self.motor_control_ack_topic, json.dumps({"dev": [error_payload]}))
+                dev_err_list.append({"d_id": d_id, "mtr_2": 9})
                 continue
 
+            # ✅ Build command payload only with available keys
             mc_payload = {}
             if mtr_1 is not None:
                 mc_payload["mtr_1"] = mtr_1
             if mtr_2 is not None:
                 mc_payload["mtr_2"] = mtr_2
-            if flag == 0:
-                print(f"INFO: Device ID: {d_id}, Motor 1: {mtr_1}, Motor 2: {mtr_2}, IP: {ip}")
-                print(f"INFO: Motor control payload: {mc_payload}")
-            else:
-                logging.info(f"Device ID: {d_id}, Motor 1: {mtr_1}, Motor 2: {mtr_2}, IP: {ip}")
-                logging.info(f"Motor control payload: {mc_payload}")
-            tasks.append((d_id, mtr_1, mtr_2, Node(ip, "motor_control", json.dumps(mc_payload)).node_command()))
 
-        results = await asyncio.gather(*[task[3] for task in tasks], return_exceptions=True)
-        for (d_id, mtr_1, mtr_2, _), Data in zip(tasks, results):
-            device_ack = {"d_id": d_id}
-            if isinstance(Data, Exception):
-                if flag == 0:
-                    print(f"ERROR: CoAP request failed for device {d_id}: {Data}")
-                else:
-                    logging.error(f"CoAP request failed for device {d_id}: {Data}")
-                device_ack["mtr_1"] = 10
-                device_ack["mtr_2"] = 10
-                dev_err_list.append(device_ack)
-                self.publish(self.motor_control_ack_topic, json.dumps({"dev": [device_ack]}))
-                continue
-            
-            try:
-                if mtr_1 is not None or (isinstance(Data, dict) and "mtr_1" in Data):
-                    device_ack["mtr_1"] = Data.get("mtr_1", mtr_1) if isinstance(Data, dict) else mtr_1
-                if mtr_2 is not None or (isinstance(Data, dict) and "mtr_2" in Data):
-                    device_ack["mtr_2"] = Data.get("mtr_2", mtr_2) if isinstance(Data, dict) else mtr_2
-                dev_list.append(device_ack)
-                if flag == 0:
-                    print(f"INFO: Motor Control ACK Device: {device_ack}")
-                else:
-                    logging.info(f"Motor Control ACK Device: {device_ack}")
-            except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Error processing CoAP response for device {d_id}: {e}")
-                else:
-                    logging.error(f"Error processing CoAP response for device {d_id}: {e}")
-                device_ack["mtr_1"] = 10
-                device_ack["mtr_2"] = 10
-                dev_err_list.append(device_ack)
-                self.publish(self.motor_control_ack_topic, json.dumps({"dev": [device_ack]}))
+            tasks.append((d_id, mtr_1, mtr_2,
+                        Node(ip, "motor_control", json.dumps(mc_payload)).node_command()))
 
+        # ✅ Execute all valid tasks
+        if tasks:
+            results = await asyncio.gather(*[task[3] for task in tasks], return_exceptions=True)
+
+            for (d_id, mtr_1, mtr_2, _), data in zip(tasks, results):
+                ack = {"d_id": d_id}
+
+                if data is None:
+                    ack["mtr_1"] = 10
+                    ack["mtr_2"] = 10
+                    dev_err_list.append(ack)
+                    continue
+
+                # ✅ If response is dict, use it; else use original
+                if mtr_1 is not None or (isinstance(data, dict) and "mtr_1" in data):
+                    ack["mtr_1"] = data.get("mtr_1", mtr_1) if isinstance(data, dict) else mtr_1
+
+                if mtr_2 is not None or (isinstance(data, dict) and "mtr_2" in data):
+                    ack["mtr_2"] = data.get("mtr_2", mtr_2) if isinstance(data, dict) else mtr_2
+
+                dev_list.append(ack)
+
+        # ✅ Final Publish Once
         if dev_list:
             final_payload = {"dev": dev_list}
-            if flag == 0:
-                print(f"INFO: Motor Control ACK Payload: {json.dumps(final_payload)}")
-            else:
-                logging.info(f"Motor Control ACK Payload: {json.dumps(final_payload)}")
+            print(f"INFO: Motor Control ACK Payload: {json.dumps(final_payload)}")
             self.publish(self.motor_control_ack_topic, json.dumps(final_payload))
+
+        if dev_err_list:
+            err_payload = {"dev": dev_err_list}
+            print(f"ERROR: Motor Control ACK Payload: {json.dumps(err_payload)}")
+            self.publish(self.motor_control_ack_topic, json.dumps(err_payload))
 
     async def handle_motor_mode_control_message(self, message):
         dev_list = []
         dev_err_list = []
         tasks = []
-        
+
         for device in message.get("dev", []):
-            d_id = device.get("d_id", None)
+            d_id = device.get("d_id")
             mtr_1 = device.get("mtr_1", None)
             mtr_2 = device.get("mtr_2", None)
+
+            # ✅ 1. Missing d_id
             if not d_id:
-                if flag == 0:
-                    print(f"ERROR: Missing d_id in device entry")
-                else:
-                    logging.error(f"Missing d_id in device entry")
-                error_payload = {"d_id": d_id, "mtr_1": 6, "mtr_2": 6}
+                error_payload = {"d_id": d_id, "mtr_1": 8, "mtr_2": 8}
                 dev_err_list.append(error_payload)
-                self.publish(self.motor_mode_config_ack_topic, json.dumps({"dev": [error_payload]}))
                 continue
 
-            ip = None
+            # ✅ 2. Resolve IP
             if self.is_ipv6(d_id) and d_id in connected_nodes:
                 ip = d_id
             else:
                 ip = mac_to_ip.get(d_id)
             if not ip:
-                if flag == 0:
-                    print(f"ERROR: No IPv6 address found for device {d_id}")
-                else:
-                    logging.error(f"No IPv6 address found for device {d_id}")
-                error_payload = {"d_id": d_id, "mtr_1": 6, "mtr_2": 6}
+                error_payload = {"d_id": d_id, "mtr_1": 8, "mtr_2": 8}
                 dev_err_list.append(error_payload)
-                self.publish(self.motor_mode_config_ack_topic, json.dumps({"dev": [error_payload]}))
                 continue
 
-            if mtr_1 is not None and (not isinstance(mtr_1, int) or mtr_1 not in [0, 1]):
-                if flag == 0:
-                    print(f"ERROR: Invalid mtr_1 value for device  {d_id}: {mtr_1}")
-                else:
-                    logging.error(f"Invalid mtr_1 value for device {d_id}: {mtr_1}")
-                error_payload = {"d_id": d_id, "mtr_1": 5, "mtr_2": 5}
+            # ✅ 3. Validate values (allowed 2 or 3)
+            if mtr_1 is not None and (not isinstance(mtr_1, int) or mtr_1 not in [2, 3]):
+                error_payload = {"d_id": d_id, "mtr_1": 9}
                 dev_err_list.append(error_payload)
-                self.publish(self.motor_mode_config_ack_topic, json.dumps({"dev": [error_payload]}))
                 continue
 
-            if mtr_2 is not None and (not isinstance(mtr_2, int) or mtr_2 not in [0, 1]):
-                if flag == 0:
-                    print(f"ERROR: Invalid mtr_2 value for device {d_id}: {mtr_2}")
-                else:
-                    logging.error(f"Invalid mtr_2 value for device {d_id}: {mtr_2}")
-                error_payload = {"d_id": d_id, "mtr_1": 5, "mtr_2": 5}
+            if mtr_2 is not None and (not isinstance(mtr_2, int) or mtr_2 not in [2, 3]):
+                error_payload = {"d_id": d_id, "mtr_2": 9}
                 dev_err_list.append(error_payload)
-                self.publish(self.motor_mode_config_ack_topic, json.dumps({"dev": [error_payload]}))
                 continue
 
+            # ✅ 4. Build payload (convert 2➡0 & 3➡1 before sending)
             mc_payload = {}
-            if mtr_1 is not None:
-                mc_payload["mtr_1"] = mtr_1
-            if mtr_2 is not None:
-                mc_payload["mtr_2"] = mtr_2
-            if flag == 0:
-                print(f"INFO: Device ID: {d_id}, Motor 1: {mtr_1}, Motor 2: {mtr_2}, IP: {ip}")
-                print(f"INFO: Motor mode control payload: {mc_payload}")
-                print(f"DEBUG: Task type for {d_id}: {type(Node(ip, 'cm_change', json.dumps(mc_payload)).node_command())}")
-            else:
-                logging.info(f"Device ID: {d_id}, Motor 1: {mtr_1}, Motor 2: {mtr_2}, IP: {ip}")
-                logging.info(f"Motor mode control payload: {mc_payload}")
-            tasks.append((d_id, mtr_1, mtr_2, Node(ip, "cm_change", json.dumps(mc_payload)).node_command()))
+            send_mtr_1 = None
+            send_mtr_2 = None
 
+            if mtr_1 is not None:
+                send_mtr_1 = 0 if mtr_1 == 2 else 1
+                mc_payload["mtr_1"] = send_mtr_1
+
+            if mtr_2 is not None:
+                send_mtr_2 = 0 if mtr_2 == 2 else 1
+                mc_payload["mtr_2"] = send_mtr_2
+
+            tasks.append((d_id, mtr_1, mtr_2,
+                        Node(ip, "cm_change", json.dumps(mc_payload)).node_command()))
+
+        # ✅ Run all tasks
         results = await asyncio.gather(*[task[3] for task in tasks], return_exceptions=True)
-        for (d_id, mtr_1, mtr_2, _), Data in zip(tasks, results):
+        print("Mode CHange Result:",results)
+        for (d_id, orig_m1, orig_m2, _), Data in zip(tasks, results):
             device_ack = {"d_id": d_id}
-            if isinstance(Data, Exception):
-                if flag == 0:
-                    print(f"ERROR: CoAP request failed for device {d_id}: {Data}")
-                else:
-                    logging.error(f"CoAP request failed for device {d_id}: {Data}")
-                device_ack["mtr_1"] = 7
-                device_ack["mtr_2"] = 7
+
+            # ✅ If timeout/exception
+            if Data is None:
+                device_ack["mtr_1"] = 10
+                device_ack["mtr_2"] = 10
                 dev_err_list.append(device_ack)
-                self.publish(self.motor_mode_config_ack_topic, json.dumps({"dev": [device_ack]}))
                 continue
-            
+
             try:
-                if mtr_1 is not None or (isinstance(Data, dict) and "mtr_1" in Data):
-                    device_ack["mtr_1"] = Data.get("mtr_1", mtr_1) if isinstance(Data, dict) else mtr_1
-                if mtr_2 is not None or (isinstance(Data, dict) and "mtr_2" in Data):
-                    device_ack["mtr_2"] = Data.get("mtr_2", mtr_2) if isinstance(Data, dict) else mtr_2
+                # ✅ If dict returned → map values back 0→2, 1→3
+                if isinstance(Data, dict):
+                    if "mtr_1" in Data or orig_m1 is not None:
+                        val1 = Data.get("mtr_1", 1 if orig_m1 == 3 else 0)
+                        device_ack["mtr_1"] = 3 if val1 == 1 else 2 if val1 == 0 else val1
+
+                    if "mtr_2" in Data or orig_m2 is not None:
+                        val2 = Data.get("mtr_2", 1 if orig_m2 == 3 else 0)
+                        device_ack["mtr_2"] = 3 if val2 == 1 else 2 if val2 == 0 else val2
+
+                else:
+                    # ✅ If no dict returned, fallback on orig values
+                    if orig_m1 is not None:
+                        device_ack["mtr_1"] = orig_m1
+                    if orig_m2 is not None:
+                        device_ack["mtr_2"] = orig_m2
+
                 dev_list.append(device_ack)
-                if flag == 0:
-                    print(f"INFO: Motor Mode Control ACK Device: {device_ack}")
-                else:
-                    logging.info(f"Motor Mode Control ACK Device: {device_ack}")
-            except Exception as e:
-                if flag == 0:
-                    print(f"ERROR: Error processing CoAP response for device {d_id}: {e}")
-                else:
-                    logging.error(f"Error processing CoAP response for device {d_id}: {e}")
-                device_ack["mtr_1"] = 7
-                device_ack["mtr_2"] = 7
+
+            except Exception:
+                device_ack["mtr_1"] = 10
+                device_ack["mtr_2"] = 10
                 dev_err_list.append(device_ack)
-                self.publish(self.motor_mode_config_ack_topic, json.dumps({"dev": [device_ack]}))
+
+        # ✅ PUBLISH ONLY ONCE AT THE END
 
         if dev_list:
             final_payload = {"dev": dev_list}
-            if flag == 0:
-                print(f"INFO: Motor Mode Control ACK Payload: {json.dumps(final_payload)}")
-            else:
-                logging.info(f"Motor Mode Control ACK Payload: {json.dumps(final_payload)}")
             self.publish(self.motor_mode_config_ack_topic, json.dumps(final_payload))
 
+        if dev_err_list:
+            err_payload = {"dev": dev_err_list}
+            self.publish(self.motor_mode_config_ack_topic, json.dumps(err_payload))
+
+
     async def handle_sync_device(self, ip, d_id):
-        global Gateway_list
         try:
-            data = await Node(ip, "info/motor_status").async_get_Device_data()
+            data = await Node(ip, "info/motor_status", "").node_command()
+            if data is None:
+                print(f"ERROR: No data for {ip}")
+                return
             ack_payload = json.dumps(data)
-            if data:
-                if flag == 0:
-                    print(f"INFO: Sync data for {d_id}: {data}")
-                elif flag == 1:
-                    logging.info(f"Sync data for {d_id}: {data}")
-            else:
-                if flag == 0:
-                    print(f"ERROR: No data for {d_id}")
-                elif flag == 1:
-                    logging.error(f"No data for {d_id}")
-            if flag == 0:
-                print(f"INFO: Publishing sync ack: {ack_payload}")
-            elif flag == 1:
-                logging.info(f"Publishing sync ack: {ack_payload}")
+            print(f"INFO: Sync data for {ip}: {data}")
             self.publish(self.device_sync_ack_topic, ack_payload)
-            self.publish(self.GATEWAY_ACK_TOPIC, json.dumps(Gateway_list))
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Error during sync for {d_id}: {e}")
-            elif flag == 1:
-                logging.error(f"Error during sync for {d_id}: {e}")
+            print(f"ERROR: Error during sync for {ip}: {e}")
 
     async def handle_config(self, ip, message):
+        sn = ""
+        d_id = "N/A"
+
         try:
-            if flag == 0:
-                print(f"INFO: Handling config request for {ip}")
-            elif flag == 1:
-                logging.info(f"Handling config request for {ip}")
-            state = await asyncio.wait_for(Node(ip, "config", message).node_command(), timeout=50)
-            message = json.loads(message)
-            sn = message.get("sn")
-            d_id = message.get("d_id")
-            if flag == 0:
-                print(f"INFO: CONFIG STATE for {ip}: {state}")
-                print("Status", str(state.get("config_sts")))
-            elif flag == 1:
-                logging.info(f"CONFIG STATE for {ip}: {state}")
-            if state and str(state.get("config_sts")) == "UPDATE_STARTED":
-                time.sleep(5)
-                data = await asyncio.wait_for(Node(ip, "config").node_command(), timeout=120)
-                data = str(data.get("config_sts", ''))
-                error_statuses = {"PARSE_FAILED", "MAC_MISMATCH", "VERIFY_FAILED", "ERASE_FAILED", "WRITE_FAILED", "UPDATE_PENDING", "PAYLOAD_TOO_LARGE"}
-                if data not in error_statuses:
-                    config_ack = {"sn": sn, "d_id": d_id, "r": 1}
-                    self.publish(self.device_config_ack_topic, json.dumps(config_ack))
-                else:
-                    config_ack = {"sn": sn, "d_id": d_id, "r": 0}
-                    self.publish(self.device_config_ack_topic, json.dumps(config_ack))
-                    print(f"ERROR: Error status received: {data}")
-            else:
-                if flag == 0:
-                    print(f"ERROR: Config update failed: {state}")
-                elif flag == 1:
-                    logging.error(f"Config update failed: {state}")
+            print(f"INFO: Handling config request for {ip}")
+
+            # ✅ Safe JSON parsing
+            try:
+                message_dict = json.loads(message)
+                sn = message_dict.get("sn", "")
+                d_id = message_dict.get("d_id", "N/A")
+            except Exception as e:
+                print(f"ERROR: Invalid JSON message: {e}")
+                raise
+
+            # =========================
+            # STEP 1: Trigger UPDATE
+            # =========================
+            try:
+                state = await asyncio.wait_for(
+                    Node(ip, "config", message).node_command(),
+                    timeout=COAP_PUT_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                print(f"ERROR: Timeout during UPDATE_STARTED request for {ip}")
+                raise
+
+            if not (state and isinstance(state, dict) and state.get("config_sts") == "UPDATE_STARTED"):
+                print(f"ERROR: UPDATE NOT STARTED for {ip}, response: {state}")
+
                 config_ack = {"sn": sn, "d_id": d_id, "r": 0}
                 self.publish(self.device_config_ack_topic, json.dumps(config_ack))
-            if flag == 0:
-                print(f"INFO: Publishing config ack")
-            elif flag == 1:
-                logging.info(f"Publishing config ack")
-        except Exception as e:
+                return
+
+            # =========================
+            # STEP 2: Get final status
+            # =========================
+            await asyncio.sleep(5)
+            try:                
+                data = await asyncio.wait_for(
+                    Node(ip, "config").node_command(),
+                    timeout=COAP_PUT_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                print(f"ERROR: Timeout during final config fetch for {ip}")
+                raise
+
+            print(f"DEBUG: Final config response from {ip}: {data}")
+
+            error_statuses = {
+                "PARSE_FAILED", "MAC_MISMATCH", "VERIFY_FAILED",
+                "ERASE_FAILED", "WRITE_FAILED", "UPDATE_PENDING",
+                "PAYLOAD_TOO_LARGE"
+            }
+
+            # =========================
+            # STEP 3: Validate response
+            # =========================
+            if not isinstance(data, dict):
+                print(f"ERROR: Invalid response format from {ip}")
+                raise ValueError("Invalid response format")
+
+            config_status = data.get("config_sts", "")
+
+            if config_status in error_statuses:
+                print(f"ERROR: Config FAILED for {ip}, status: {config_status}")
+
+                config_ack = {"sn": sn, "d_id": d_id, "r": 0}
+
+            elif "d_id" in data:
+                print(f"INFO: Config SUCCESS for {ip}, confirmed by d_id")
+
+                config_ack = {
+                    "sn": sn,
+                    "d_id": data.get("d_id", d_id),
+                    "r": 1
+                }
+
+            else:
+                print(f"ERROR: Missing d_id in response for {ip}")
+
+                config_ack = {"sn": sn, "d_id": d_id, "r": 0}
+
+            # ✅ Final publish
+            self.publish(self.device_config_ack_topic, json.dumps(config_ack))
+
+        # =========================
+        # GLOBAL EXCEPTION HANDLER
+        # =========================
+        except asyncio.TimeoutError:
+            print(f"ERROR: Timeout occurred for device {ip}")
+
             config_ack = {"sn": sn, "d_id": d_id, "r": 0}
             self.publish(self.device_config_ack_topic, json.dumps(config_ack))
-            if flag == 0:
-                print(f"ERROR: Error during config for: {e}")
-            elif flag == 1:
-                logging.error(f"Error during config for: {e}")
+
+        except ValueError as ve:
+            print(f"ERROR: ValueError for {ip}: {ve}")
+
+            config_ack = {"sn": sn, "d_id": d_id, "r": 0}
+            self.publish(self.device_config_ack_topic, json.dumps(config_ack))
+
+        except Exception as e:
+            print(f"ERROR: Unexpected error during config for {ip}: {e}")
+
+            config_ack = {"sn": sn, "d_id": d_id, "r": 0}
+            self.publish(self.device_config_ack_topic, json.dumps(config_ack))
 
     def connect(self):
         try:
-            self.client.connect(self.broker, self.port, keepalive=40)
+            self.client.connect(self.broker, self.port, keepalive=100)
             self.client.loop_start()
-            if flag == 0:
-                print("INFO: Attempting to connect to MQTT broker with SSL...")
-            elif flag == 1:
-                logging.info("Attempting to connect to MQTT broker with SSL...")
+            print("INFO: Attempting to connect to MQTT broker with SSL...")
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Connection failed: {e}")
-            elif flag == 1:
-                logging.error(f"Connection failed: {e}")
+            print(f"ERROR: Connection failed: {e}")
             raise
 
     async def reconnect_async(self):
         while not self.is_connected:
             try:
-                self.client.connect(self.broker, self.port, keepalive=40)
-                time.sleep(4)
+                self.client.connect(self.broker, self.port, keepalive=100)
                 self.client.loop_start()
-                if flag == 0:
-                    print("INFO: Attempting to reconnect to MQTT broker with SSL...")
-                elif flag == 1:
-                    logging.info("Attempting to reconnect to MQTT broker with SSL...")
+                print("INFO: Attempting to reconnect to MQTT broker with SSL...")
                 await asyncio.sleep(2)
             except Exception as e:
-                if flag == 0:
-                    print(f"WARNING: Reconnection failed: {e}. Retrying in 5 seconds...")
-                elif flag == 1:
-                    logging.warning(f"Reconnection failed: {e}. Retrying in 5 seconds...")
+                print(f"WARNING: Reconnection failed: {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
 
     def publish(self, topic, payload):
@@ -833,37 +719,21 @@ class MQTTClient:
                 try:
                     payload = payload.decode('utf-8')
                 except Exception as e:
-                    if flag == 0:
-                        print(f"WARNING: Error decoding payload bytes: {e}")
-                    elif flag == 1:
-                        logging.warning(f"Error decoding payload bytes: {e}")
+                    print(f"WARNING: Error decoding payload bytes: {e}")
                     return
             try:
                 parsed_payload = json.loads(payload)
-                if flag == 0:
-                    print(f"INFO: Before Publishing-- {topic}: {parsed_payload}")
-                elif flag == 1:
-                    logging.info(f"Before Publishing-- {topic}: {parsed_payload}")
                 date = datetime.utcnow() - datetime(1970, 1, 1)
                 milliseconds = round(date.total_seconds() * 1000)
                 parsed_payload.update({"t_s": milliseconds})
                 payload_str = json.dumps(parsed_payload)
                 self.client.publish(topic, payload_str, qos=0, retain=False)
-                if flag == 0:
-                    print(f"INFO: Published to {topic}: {payload_str}")
-                elif flag == 1:
-                    logging.info(f"Published to {topic}: {payload_str}")
+                print(f"INFO: Published to {topic}: {payload_str}")
             except json.JSONDecodeError:
-                if flag == 0:
-                    print(f"INFO: Publishing raw non-JSON payload to {topic}: {payload}")
-                elif flag == 1:
-                    logging.info(f"Publishing raw non-JSON payload to {topic}: {payload}")
                 self.client.publish(topic, payload, qos=0)
+                print(f"INFO: Published raw non-JSON payload to {topic}: {payload}")
         else:
-            if flag == 0:
-                print("ERROR: Client not connected, cannot publish.")
-            elif flag == 1:
-                logging.error("Client not connected, cannot publish.")
+            print("ERROR: Client not connected, cannot publish.")
 
 class PayloadAnomalyLogger:
     def __init__(self):
@@ -973,227 +843,174 @@ class PayloadAnomalyLogger:
         self.log_combined(payload_data, anomaly_data)
 
 class RegisteredIPManager:
-    def __init__(self, file_path="registered_ips.txt"):
+    def __init__(self, file_path="registered_devices.txt"):
         self.file_path = Path(file_path)
         self._initialize_file()
-        self.load_ips_to_reg_ip()
+        self.load_devices_to_reg_sets()
 
     def _initialize_file(self):
         if not self.file_path.exists():
             with open(self.file_path, 'w') as f:
-                pass
+                f.write("mac,ip\n")
 
-    def append_ip(self, ip):
+    def append_device(self, mac, ip):
+        global reg_mac, reg_ip
         try:
-            with open(self.file_path, 'r') as f:
-                existing_ips = {line.strip() for line in f if line.strip()}
-            if ip not in existing_ips:
-                with open(self.file_path, 'a') as f:
-                    f.write(f"{ip}\n")
-                if flag == 0:
-                    print(f"INFO: Appended IP {ip} to {self.file_path}")
-                elif flag == 1:
-                    logging.info(f"Appended IP {ip} to {self.file_path}")
+            existing_devices = self.fetch_all_devices()
+            if mac not in existing_devices or existing_devices.get(mac) != ip:
+                with open(self.file_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([mac, ip])
+                reg_mac.add(mac)
                 reg_ip.add(ip)
+                print(f"INFO: Appended MAC {mac} and IP {ip} to {self.file_path}")
             else:
-                if flag == 0:
-                    print(f"INFO: IP {ip} already exists in {self.file_path}")
-                elif flag == 1:
-                    logging.info(f"IP {ip} already exists in {self.file_path}")
+                print(f"INFO: MAC {mac} with IP {ip} already exists in {self.file_path}")
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Failed to append IP {ip} to {self.file_path}: {e}")
-            elif flag == 1:
-                logging.error(f"Failed to append IP {ip} to {self.file_path}: {e}")
+            print(f"ERROR: Failed to append MAC {mac} and IP {ip} to {self.file_path}: {e}")
 
-    def append_multi_ip(self, ips):
+    def replace_device(self, old_mac, old_ip, new_mac, new_ip):
+        global reg_mac, reg_ip
         try:
+            lines = []
+            replaced = False
             with open(self.file_path, 'r') as f:
-                existing_ips = {line.strip() for line in f if line.strip()}
-                for ip in ips:
-                    if ip not in existing_ips:
-                        with open(self.file_path, 'a') as f:
-                            f.write(f"{ip}\n")
-                            if flag == 0:
-                                print(f"INFO: Appended MAC {ip} to {self.file_path}")
-                            elif flag == 1:
-                                logging.info(f"Appended MAC {ip} to {self.file_path}")
+                lines = f.readlines()
+            with open(self.file_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["mac", "ip"])
+                for line in lines[1:]:
+                    mac, ip = line.strip().split(',')
+                    if mac == old_mac and ip == old_ip:
+                        writer.writerow([new_mac, new_ip])
+                        replaced = True
                     else:
-                        if flag == 0:
-                            print(f"INFO: Already existed MAC {ip} to {self.file_path}")
-                        elif flag == 1:
-                            logging.info(f"Already existed {ip} to {self.file_path}")
+                        writer.writerow([mac, ip])
+                if not replaced:
+                    print(f"WARNING: MAC {old_mac} with IP {old_ip} not found in {self.file_path}")
+                    return
+            if old_mac in reg_mac:
+                reg_mac.remove(old_mac)
+            if old_ip in reg_ip:
+                reg_ip.remove(old_ip)
+            reg_mac.add(new_mac)
+            reg_ip.add(new_ip)
+            print(f"INFO: Replaced MAC {old_mac} with IP {old_ip} with MAC {new_mac} and IP {new_ip} in {self.file_path}")
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Failed to append IP {ip} to {self.file_path}: {e}")
-            elif flag == 1:
-                logging.error(f"Failed to append IP {ip} to {self.file_path}: {e}")
+            print(f"ERROR: Failed to replace MAC {old_mac} with IP {old_ip}: {e}")
 
-    def replace_ip(self, old_ip, new_ip):
+    def delete_device(self, mac, ip):
+        global reg_mac, reg_ip
         try:
+            lines = []
             with open(self.file_path, 'r') as f:
                 lines = f.readlines()
-            lines = [line.strip() for line in lines if line.strip()]
-            if old_ip in lines:
-                lines = [new_ip if line == old_ip else line for line in lines]
-                with open(self.file_path, 'w') as f:
-                    for line in lines:
-                        f.write(f"{line}\n")
-                if old_ip in reg_ip:
-                    reg_ip.remove(old_ip)
-                reg_ip.add(new_ip)
-                if flag == 0:
-                    print(f"INFO: Replaced IP {old_ip} with {new_ip} in {self.file_path}")
-                elif flag == 1:
-                    logging.info(f"Replaced IP {old_ip} with {new_ip} in {self.file_path}")
-            else:
-                if flag == 0:
-                    print(f"WARNING: IP {old_ip} not found in {self.file_path}")
-                elif flag == 1:
-                    logging.warning(f"IP {old_ip} not found in {self.file_path}")
-        except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Failed to replace IP {old_ip} with {new_ip}: {e}")
-            elif flag == 1:
-                logging.error(f"Failed to replace IP {old_ip} with {new_ip}: {e}")
-
-    def delete_ip(self, ip):
-        try:
-            with open(self.file_path, 'r') as f:
-                lines = f.readlines()
-            lines = [line.strip() for line in lines if line.strip() and line.strip() != ip]
-            with open(self.file_path, 'w') as f:
-                for line in lines:
-                    f.write(f"{line}\n")
+            with open(self.file_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["mac", "ip"])
+                for line in lines[1:]:
+                    if line.strip() and not line.strip().startswith(f"{mac},{ip}"):
+                        writer.writerow(line.strip().split(','))
+            if mac in reg_mac:
+                reg_mac.remove(mac)
             if ip in reg_ip:
                 reg_ip.remove(ip)
-            if flag == 0:
-                print(f"INFO: Deleted IP {ip} from {self.file_path}")
-            elif flag == 1:
-                logging.info(f"Deleted IP {ip} from {self.file_path}")
+            print(f"INFO: Deleted MAC {mac} and IP {ip} from {self.file_path}")
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Failed to delete IP {ip} from {self.file_path}: {e}")
-            elif flag == 1:
-                logging.error(f"Failed to delete IP {ip} from {self.file_path}: {e}")
+            print(f"ERROR: Failed to delete MAC {mac} and IP {ip} from {self.file_path}: {e}")
 
-    def fetch_all_ips(self):
+    def fetch_all_devices(self):
         try:
+            devices = {}
             with open(self.file_path, 'r') as f:
-                ips = {line.strip() for line in f if line.strip()}
-            if flag == 0:
-                print(f"INFO: Fetched IPs from {self.file_path}: {ips}")
-            elif flag == 1:
-                logging.info(f"Fetched IPs from {self.file_path}: {ips}")
-            return ips
+                reader = csv.reader(f)
+                next(reader)  # Skip header
+                for mac, ip in reader:
+                    if mac and ip:
+                        devices[mac] = ip
+            return devices
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Failed to fetch IPs from {self.file_path}: {e}")
-            elif flag == 1:
-                logging.error(f"Failed to fetch IPs from {self.file_path}: {e}")
-            return set()
+            print(f"ERROR: Failed to fetch devices from {self.file_path}: {e}")
+            return {}
 
-    def load_ips_to_reg_ip(self):
-        global reg_ip, reg_mac
+    def load_devices_to_reg_sets(self):
+        global reg_mac, reg_ip, mac_to_ip, ip_to_mac
         try:
-            if self.file_path.name == "Registered_Macs.txt":
-                device_set = reg_mac
-                device_type = "MACs"
-            else:
-                device_set = reg_ip
-                device_type = "IPs"
-            
-            with open(self.file_path, 'r') as f:
-                device_set.update({line.strip() for line in f if line.strip()})
-            
-            if flag == 0:
-                print(f"INFO: Loaded {device_type} to {device_type.lower()}: {device_set}")
-            elif flag == 1:
-                logging.info(f"Loaded {device_type} to {device_type.lower()}: {device_set}")
+            devices = self.fetch_all_devices()
+            reg_mac.update(devices.keys())
+            reg_ip.update(devices.values())
+            mac_to_ip.update(devices)
+            ip_to_mac.update({ip: mac for mac, ip in devices.items()})
+            print(f"INFO: Loaded devices to reg_mac: {reg_mac}, reg_ip: {reg_ip}")
         except Exception as e:
-            if flag == 0:
-                print(f"ERROR: Failed to load {device_type} from {self.file_path}: {e}")
-            elif flag == 1:
-                logging.error(f"Failed to load {device_type} from {self.file_path}: {e}")
+            print(f"ERROR: Failed to load devices from {self.file_path}: {e}")
 
 async def periodic_monitor_nodes(mqtt_client, monitor, logger):
     while True:
         if mqtt_client.is_connected:
             await monitor.monitor_nodes(mqtt_client, logger)
         else:
-            if flag == 0:
-                print("INFO: MQTT client not connected, skipping monitor_nodes")
-            elif flag == 1:
-                logging.info("MQTT client not connected, skipping monitor_nodes")
+            print("INFO: MQTT client not connected, skipping monitor_nodes")
         await asyncio.sleep(LIVE_TIME)
 
 async def periodic_sync_devices(mqtt_client, monitor):
+    global connected_nodes, macs
+    print(f"INFO: Before MAC List : {macs}")
+    macs.clear()
+    print(f"INFO: After MAC List : {macs}")
     while True:
         if mqtt_client.is_connected:
-            if flag == 0:
-                print("INFO: Running periodic sync for all active nodes")
-            elif flag == 1:
-                logging.info("Running periodic sync for all active nodes")
-            active = await Node().check_nodes_activity()
+            print("INFO: Running periodic sync for all active nodes")
             tasks = []
-            for ip in active:
+            for ip in connected_nodes:
                 d_id = ip_to_mac.get(ip, "unknown")
-                tasks.append(mqtt_client.handle_sync_device(ip, d_id))
+                if d_id != "unknown":
+                    tasks.append(mqtt_client.handle_sync_device(ip, d_id))
+            gateway = {
+                "gtw_n": gateway_name,
+                "cntd_n": list(macs)  # Convert set to list
+            }
+            #mqtt_client.publish("gateways/gateway_name/devices/ack", json.dumps(gateway))
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             else:
-                if flag == 0:
-                    print("INFO: No active nodes to sync")
-                elif flag == 1:
-                    logging.info("No active nodes to sync")
+                print("INFO: No active nodes to sync")
         else:
-            if flag == 0:
-                print("INFO: MQTT client not connected, skipping sync_devices")
-            elif flag == 1:
-                logging.info("MQTT client not connected, skipping sync_devices")
+            print("INFO: MQTT client not connected, skipping sync_devices")
         await asyncio.sleep(SYNC_TIME)
 
 async def main():
+    global macs
     def handle_sigtstp(signum, frame):
-        if flag == 0:
-            print("INFO: Received Ctrl+Z (SIGTSTP), terminating...")
-        elif flag == 1:
-            logging.info("Received Ctrl+Z (SIGTSTP), terminating...")
+        print("INFO: Received Ctrl+Z (SIGTSTP), terminating...")
         raise SystemExit("Terminated by Ctrl+Z")
 
     signal.signal(signal.SIGTSTP, handle_sigtstp)
     monitor = WiSunMonitor()
-    reg = RegisteredIPManager()
+    reg = RegisteredIPManager(file_path="registered_devices.txt")
     logger = PayloadAnomalyLogger()
-    config = load_config()
-    ca_cert = config["ca_cert"]
-    await monitor.get_nodes()
-    if not network_name:
-        if flag == 0:
-            print("ERROR: Failed to set network_name, exiting...")
-        elif flag == 1:
-            logging.error("Failed to set network_name, exiting...")
-        return
-    mqtt_client = MQTTClient(reg)
-    mqtt_client.update_dynamic_topics(network_name)
+    mqtt_client = MQTTClient(
+        broker=MQTT_BROKER,
+        port=MQTT_PORT,
+        client_id=GATEWAY_NAME,
+        username=MQTT_USERNAME,
+        password=MQTT_PASSWORD,
+        ca_cert=CA_CERT,
+        reg=reg
+    )
+    mqtt_client.update_dynamic_topics(gateway_name)
 
     try:
         mqtt_client.connect()
     except Exception as e:
-        if flag == 0:
-            print(f"ERROR: Failed to connect to MQTT broker: {e}, exiting...")
-        elif flag == 1:
-            logging.error(f"Failed to connect to MQTT broker: {e}, exiting...")
+        print(f"ERROR: Failed to connect to MQTT broker: {e}, exiting...")
         return
     for _ in range(10):
         if mqtt_client.is_connected:
             break
         await asyncio.sleep(1)
     if not mqtt_client.is_connected:
-        if flag == 0:
-            print("ERROR: MQTT client failed to connect, exiting...")
-        elif flag == 1:
-            logging.error("MQTT client failed to connect, exiting...")
+        print("ERROR: MQTT client failed to connect, exiting...")
         return
     topics = [
         (mqtt_client.GATEWAY_TOPIC, 0),
@@ -1201,14 +1018,9 @@ async def main():
         (mqtt_client.device_config_topic, 0),
         (mqtt_client.motor_config_topic, 0),
         (mqtt_client.motor_mode_config_topic, 0),
-        (mqtt_client.motor_schedule_topic, 0)
     ]
     mqtt_client.client.subscribe(topics, qos=0)
-    await monitor.update_mac_ip_mapping(mqtt_client, reg)
-    if flag == 0:
-        print(f"INFO: Subscribed to topics: {[t[0] for t in topics]}")
-    elif flag == 1:
-        logging.info(f"Subscribed to topics: {[t[0] for t in topics]}")
+    print(f"INFO: Subscribed to topics: {[t[0] for t in topics]}")
 
     monitor_task = asyncio.create_task(periodic_monitor_nodes(mqtt_client, monitor, logger))
     sync_task = asyncio.create_task(periodic_sync_devices(mqtt_client, monitor))
@@ -1219,49 +1031,23 @@ async def main():
                 if not mqtt_client.is_connected:
                     await mqtt_client.reconnect_async()
                     mqtt_client.client.subscribe(topics, qos=0)
-                    if flag == 0:
-                        print(f"INFO: Re-subscribed to topics: {[t[0] for t in topics]}")
-                    elif flag == 1:
-                        logging.info(f"Re-subscribed to topics: {[t[0] for t in topics]}")
-                await monitor.update_mac_ip_mapping(mqtt_client, reg)
-                reg.load_ips_to_reg_ip()
-                RegisteredIPManager(file_path="Registered_Macs.txt").load_ips_to_reg_ip()
-                await asyncio.sleep(60)
+                    print(f"INFO: Re-subscribed to topics: {[t[0] for t in topics]}")
+                await asyncio.sleep(180)
             except KeyboardInterrupt:
-                if flag == 0:
-                    print("INFO: Received Ctrl+C (KeyboardInterrupt), terminating...")
-                elif flag == 1:
-                    logging.info("Received Ctrl+C (KeyboardInterrupt), terminating...")
+                print("INFO: Received Ctrl+C (KeyboardInterrupt), terminating...")
                 monitor_task.cancel()
                 sync_task.cancel()
+                try:
+                    await asyncio.gather(monitor_task, sync_task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass
                 mqtt_client.client.loop_stop()
                 mqtt_client.client.disconnect()
                 raise SystemExit("Terminated by Ctrl+C")
-            except Exception as e:
-                if flag == 0:
-                    print(f"WARNING: Non-critical error in main loop: {e}, continuing...")
-                elif flag == 1:
-                    logging.warning(f"Non-critical error in main loop: {e}, continuing...")
-                await asyncio.sleep(1)
     except asyncio.CancelledError:
-        if flag == 0:
-            print("INFO: Periodic tasks cancelled")
-        elif flag == 1:
-            logging.info("Periodic tasks cancelled")
+        print("INFO: Periodic tasks cancelled")
         mqtt_client.client.loop_stop()
-        mqtt_client.client.disconnect()
+        mqtt_client.client.disconnect()      
 
 if __name__ == "__main__":
-    print(f"DEBUG: Type of main: {type(main)}")
-    try:
-        asyncio.run(main())
-    except SystemExit as e:
-        if flag == 0:
-            print(f"INFO: Program terminated: {e}")
-        elif flag == 1:
-            logging.info(f"Program terminated: {e}")
-    except Exception as e:
-        if flag == 0:
-            print(f"ERROR: Unexpected error in asyncio.run: {e}")
-        elif flag == 1:
-            logging.error(f"Unexpected error in asyncio.run: {e}")
+    asyncio.run(main())
