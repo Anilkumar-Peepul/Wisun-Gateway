@@ -13,10 +13,37 @@ from pathlib import Path
 import signal
 from aiocoap.resource import Resource
 from pydbus import SystemBus
+import logging
 # ================= CONFIG LOAD =================
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(GATEWAY_RUNTIME_LOG),
+        logging.StreamHandler()
+    ]
+)
 BASE_DIR = Path(__file__).resolve().parent
+# ================= PATHS =================
 
+LOG_DIR = BASE_DIR / "logs"
+DATA_DIR = BASE_DIR / "data"
+OFFLINE_DIR = DATA_DIR / "offline_logs"
+
+LOG_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
+OFFLINE_DIR.mkdir(exist_ok=True)
+
+# Files
+COMBINED_LOG_FILE = LOG_DIR / "combined_log.csv"
+
+IP_MAC_CSV = DATA_DIR / "ip_mac_mappings.csv"
+
+REGISTERED_DEVICES_FILE = DATA_DIR / "registered_devices.txt"
+
+GATEWAY_RUNTIME_LOG = LOG_DIR / "gateway.log"
+
+# =========================================
 with open(BASE_DIR / "config/gateway.json") as f:
     gateway_config = json.load(f)
 
@@ -42,8 +69,7 @@ COAP_PUT_TIMEOUT = 10   # seconds
 DEVICE_SYNC_PERIOD = 30000  # seconds
 DEVICE_LIVE_PERIOD = 10  # seconds
 LOG_FILE = Path("BR_V1.0_LOGG_FILE")
-IP_MAC_CSV = Path("ip_mac_mappings.csv")
-
+IP_MAC_CSV = IP_MAC_CSV
 # Define global variables
 flag = 0
 Frequency = 1
@@ -767,7 +793,7 @@ class PayloadAnomalyLogger:
         self.m_a_dr = 0.3
         self.m_a_ol = 0.4
         self.m_a_ci = 0.15
-        self.combined_log_file = Path("combined_log.csv")
+        self.combined_log_file = COMBINED_LOG_FILE
 
     def max_diff(self, arr):
         return max(arr) - min(arr) if arr else 0
@@ -1004,7 +1030,7 @@ async def main():
 
     signal.signal(signal.SIGTSTP, handle_sigtstp)
     monitor = WiSunMonitor()
-    reg = RegisteredIPManager(file_path="registered_devices.txt")
+    reg = RegisteredIPManager(file_path=REGISTERED_DEVICES_FILE)
     logger = PayloadAnomalyLogger()
     mqtt_client = MQTTClient(
         broker=MQTT_BROKER,
