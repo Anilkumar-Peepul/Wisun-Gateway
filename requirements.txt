@@ -2,4 +2,6 @@ asyncio
 paho-mqtt
 aiocoap
 openpyxl
+PyGObject
 pydbus
+
