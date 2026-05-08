@@ -2,7 +2,7 @@
 
 set -e
 
-BASE_DIR="/home/pi/gateway"
+BASE_DIR="/home/peepul/gateway"
 
 echo "[INFO] Generating wsbrd.conf..."
 
