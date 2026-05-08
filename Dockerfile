@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv env
 
 # Install requirements inside venv
-RUN /app/coap_env/bin/pip install --no-cache-dir -r requirements.txt
+RUN /app/env/bin/pip install --no-cache-dir -r requirements.txt
 
 # Run app using venv python
 CMD ["/app/env/bin/python", "app.py"]
