@@ -1,37 +1,87 @@
-# Wisun-Gateway
-Wi-SUN Border Router with CoAP + EMQX Cloud+ Offline Date Logger
+# Wi-SUN Gateway
+
+Raspberry Pi + EFR32 Wi-SUN Border Router + MQTT + CoAP Gateway
+
+---
+
+## Features
+
+- Wi-SUN Border Router
+- MQTT TLS Communication
+- CoAP Device Monitoring
+- Offline Data Logging
+- Dockerized Deployment
+- LTE/WiFi Connectivity
+
+---
+
+## Folder Structure
+
+```text
 gateway/
-│
 ├── app.py
-├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
-├── README.md
-│
+├── requirements.txt
 ├── config/
-│   ├── config.json
-│   ├── gateway.json
-│   └── wsbrd.conf
-│
 ├── certs/
-│   ├── stage_ca.pem
-│   └── live_ca.pem
-│
 ├── scripts/
-│   ├── start_wsbrd.sh
-│   ├── install.sh
-│   ├── setup_services.sh
-│   └── health_check.sh
-│
 ├── services/
-│   └── wsbrd.service
-│
-├── data/
-│   ├── .gitkeep
-│   └── offline_logs/
-│
 ├── logs/
-│   └── .gitkeep
-│
-└── docs/
-    └── architecture.md
+└── data/
+```
+
+---
+
+## Run
+
+### Build Container
+
+```bash
+docker compose build
+```
+
+### Start
+
+```bash
+docker compose up -d
+```
+
+### Logs
+
+```bash
+docker logs -f wisun_gateway
+```
+
+---
+
+## Wi-SUN
+
+UART Port:
+
+```text
+/dev/ttyAMA0
+```
+
+Configured in:
+
+```text
+config/gateway.json
+```
+
+---
+
+## Services
+
+- wsbrd.service
+- gateway.service
+
+---
+
+## MQTT
+
+Supports:
+
+- EMQX
+- TLS
+- Offline Recovery
