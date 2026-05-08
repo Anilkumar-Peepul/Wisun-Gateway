@@ -5,3 +5,15 @@ network_name = {{NETWORK_NAME}}
 uart_device = {{UART_PORT}}
 
 domain = IN
+chan_plan_id = 40
+phy_mode_id = 0x03
+regional_regulation = wpc
+# Path to Private key (keep it secret). PEM and DER formats are accepted.
+key = /usr/local/share/doc/wsbrd/examples/br_key.pem
+
+# Path to Certificate for the key. PEM and DER formats are accepted.
+certificate = /usr/local/share/doc/wsbrd/examples/br_cert.pem
+
+# Path to Certificate of the Certification Authority (CA) (shared with all
+# devices). PEM and DER formats are accepted.
+authority = /usr/local/share/doc/wsbrd/examples/ca_cert.pem
