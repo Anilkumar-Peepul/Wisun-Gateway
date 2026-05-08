@@ -6,7 +6,7 @@ Requires=docker.service
 [Service]
 Type=simple
 
-WorkingDirectory=/home/pi/gateway
+WorkingDirectory=/home/peepul/Wisun-Gateway
 
 ExecStart=/usr/bin/docker compose up
 ExecStop=/usr/bin/docker compose down
