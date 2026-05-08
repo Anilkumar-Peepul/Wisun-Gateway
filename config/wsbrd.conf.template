@@ -4,3 +4,4 @@ network_name = {{NETWORK_NAME}}
 
 uart_device = {{UART_PORT}}
 
+domain = IN
