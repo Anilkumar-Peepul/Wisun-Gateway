@@ -1,5 +1,0 @@
-asyncio
-paho-mqtt
-aiocoap
-openpyxl
-pydbus
