@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from constants import LIVE_PERIOD, SYNC_PERIOD, LIVE_PERIOD, SYNC_PERIOD
 from aiocoap import Context, Message, GET, PUT, CON
 
 class Node:
