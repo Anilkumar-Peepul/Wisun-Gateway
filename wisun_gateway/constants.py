@@ -1,0 +1,4 @@
+COAP_GET_TIMEOUT = 10
+COAP_PUT_TIMEOUT = 10
+LIVE_PERIOD = 10      # seconds
+SYNC_PERIOD = 300     # seconds
