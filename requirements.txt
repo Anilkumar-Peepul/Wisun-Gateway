@@ -1,0 +1,4 @@
+aiocoap
+paho-mqtt
+pydbus
+python-dotenv
