@@ -1,8 +1,8 @@
 import re
 from pydbus import SystemBus
-from .node import Node
-from .config import GATEWAY_NAME
-from .constants import *
+from node import Node
+from config import GATEWAY_NAME
+from constants import *
 
 class WiSunMonitor:
     def __init__(self):
