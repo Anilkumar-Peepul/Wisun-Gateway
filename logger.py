@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
-from .config import COMBINED_LOG_FILE, LOG_DIR
+from config import COMBINED_LOG_FILE, LOG_DIR
 
 class PayloadLogger:
     def __init__(self):
