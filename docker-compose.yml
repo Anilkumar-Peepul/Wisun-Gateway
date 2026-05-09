@@ -1,18 +1,23 @@
-version: "3"
-
 services:
   wisun_gateway:
     image: wisun_gateway
+
     container_name: wisun_gateway
 
     network_mode: host
 
-    restart: always
-
     privileged: true
+
+    restart: always
 
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+
+      # DBUS SOCKET
+      - /var/run/dbus:/var/run/dbus
+
+    environment:
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
 
     command: python app.py
