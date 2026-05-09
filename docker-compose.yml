@@ -1,0 +1,18 @@
+version: "3"
+
+services:
+  wisun_gateway:
+    image: wisun_gateway
+    container_name: wisun_gateway
+
+    network_mode: host
+
+    restart: always
+
+    privileged: true
+
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+    command: python app.py
